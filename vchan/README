@@ -1,0 +1,39 @@
+# The algorithm
+
+Sending side:
+
+1. The sending application asks to send some bytes.
+Check whether the receiver has closed the channel and abort if so.
+
+2. Check the amount of buffer space available.
+
+3. If there isn’t enough, we set NotifyRead so the receiver will notify us when there is more.
+Also check the space again after this, in case it changed while setting the flag.
+
+4. If there is any space:
+    * write as much data as it's possible to the buffer.
+    * If the NotifyWrite flag is set, clear it and notify the receiver of the write.
+
+5. If we wrote everything, return success.
+
+6. Otherwise, wait to be notified of more space.
+
+7. Check whether the receiver has closed the channel.
+If so abort. Otherwise, go back to step 2.
+
+Receiving side:
+
+1. The receiving application asks us to read up to some amount of data.
+
+2. Check the amount of data available in the buffer.
+
+3. If there isn’t as much as requested, set NotifyWrite so the sender will notify us when there is.
+Also check the space again after this, in case it changed while setting the flag.
+
+4. If there is any data, ead up to the amount requested.
+If the NotifyRead flag is set, clear it and notify the sender of the new space.
+Return success to the application (even if we didn’t get as much as requested).
+
+5. Otherwise (if there was no data), check whether the sender has closed the connection.
+
+6. If not (if the connection is still open), wait to be notified of more data, and then go back to step 2.
