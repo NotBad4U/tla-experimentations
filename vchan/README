@@ -37,3 +37,7 @@ Return success to the application (even if we didn’t get as much as requested)
 5. Otherwise (if there was no data), check whether the sender has closed the connection.
 
 6. If not (if the connection is still open), wait to be notified of more data, and then go back to step 2.
+
+
+
+Look at the `doc` folder for more informations about the algorithm.

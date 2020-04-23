@@ -16,3 +16,9 @@ The problem was designed to illustrate the challenges of avoiding deadlock, a sy
 There are 5 philosophers sitting around a table. Between each philosopher is a fork and, in order to eat a philosopher must hold both of the forks. (The spaghetti is really messy.) The philosophers cycle between 3 states: thinking, hungry, and eating. The dining philosopher protocol should satisfy 1. (safety) if a process is eating neither of its left neighbor or right neighbor can be eating, and 2. (progress) if a process is hungry, eventually it gets to eat.
 
 *Formulation of the problem by Dijkstra*
+
+## Xen vchan protocol
+
+The vchan protocol is used to stream data between virtual machines on a Xen host without needing any locks.
+
+[libxenvchan.h](http://xenbits.xen.org/gitweb/?p=xen.git;a=blob;f=xen/include/public/io/libxenvchan.h;h=44284f437ab30f01049f280035dbb711103ca9b0;hb=HEAD)
