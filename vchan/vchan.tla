@@ -41,7 +41,7 @@ Set(f) == f' = TRUE
 
 Empty(b) == Len(b) = 0
 
-NotEmpty(b) == Len(b) /= 0
+NotEmpty(b) == Len(b) > 0
 ----------------
 
 VARIABLES
@@ -84,6 +84,8 @@ MESSAGE == MSG(MaxWriteLen)
 vars == << Sent, Got, SenderLive, ReceiverLive, SenderState, ReceiverState, Buffer, msg, NotifyWrite, ReceiverIT, NotifyRead, SenderIT >>
 
 ZeroToFive == 0..5
+
+LimitSent == Len(Sent) < 4
 
 ----------------------------------------------------------------
 
@@ -128,7 +130,8 @@ SenderWrite1 ==
         /\ msg' = Drop(msg, n)
     /\ Len(Buffer') < BufferSize
     /\ SenderState' = AfterWriting
-    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, NotifyRead, SenderIT, NotifyWrite, ReceiverIT >>
+    /\ Set(NotifyRead)
+    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, SenderIT, NotifyWrite, ReceiverIT >>
 
 \* no free space: Write R Blocked
 SenderWrite2 ==
@@ -141,39 +144,77 @@ SenderWrite2 ==
         /\ msg' = Drop(msg, n)
     /\ Len(Buffer') = BufferSize
     /\ SenderState' = Blocked
-    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, NotifyWrite, ReceiverIT, SenderIT, NotifyRead >>
+    /\ Set(NotifyRead)
+    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, NotifyWrite, ReceiverIT, SenderIT >>
+
+(*
+    Fix deadlock when the Sender write everything, msg is empty and so fall into the Blocked state.
+    When the receiver will wake-up and read, it will notify the Sender with SenderIT. But when the
+    sender will execute the action UnblockSender, that will put it in the Writing state. THe problem is
+    that the msg is empty, so it's impossible to execute SenderWrite1 or SenderWrite2, so it's running into a deadlock.
+    To fix this, we add this action to override this problem. It will pass the Sender in Writing State into the AfterWriting state when
+    the message is empty.
+
+    NOTE: not sure if it's the best solution
+*)
+SenderWrite3 ==
+    /\ SenderLive
+    /\ ReceiverLive
+    /\ SenderState = Writing
+    /\ Empty(msg)
+    /\ Empty(Buffer)
+    /\ SenderState' = AfterWriting
+    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, NotifyWrite, ReceiverIT, SenderIT, NotifyRead, Buffer, msg >>
+
+
 
 \* all sent: afterWriting R idle
 SenderWriteNext1 ==
     /\ SenderLive
     /\ SenderState = AfterWriting
     /\ Empty(msg)
+    /\ IF NotifyWrite
+        THEN
+            /\ Clear(NotifyWrite)
+            /\ Set(ReceiverIT)
+        ELSE
+            UNCHANGED <<NotifyWrite, ReceiverIT>>
     /\ SenderState' = Idle
-    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, Buffer, msg, NotifyRead, SenderIT, NotifyWrite, ReceiverIT >>
+    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, Buffer, msg, SenderIT, NotifyRead >>
 
 \* not all sent: afterwriting R blocked
 SenderWriteNext2 ==
     /\ SenderLive
     /\ SenderState = AfterWriting
     /\ NotEmpty(msg)
+    /\ IF NotifyWrite = TRUE
+        THEN
+            /\ Clear(NotifyWrite)
+            /\ Set(ReceiverIT)
+        ELSE
+            UNCHANGED <<NotifyWrite, ReceiverIT>>
     /\ SenderState' = Blocked
-    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, Buffer, msg, SenderIT, NotifyRead, NotifyWrite, ReceiverIT >>
+    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, Buffer, msg, SenderIT, NotifyRead >>
 
 \* receiver live & IT: blocked R writing
 SenderUnblock1 ==
     /\ SenderLive
     /\ SenderState = Blocked
     /\ ReceiverLive
+    /\ SenderIT
     /\ SenderState' = Writing
-    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, Buffer, msg, NotifyWrite, ReceiverIT, NotifyRead, SenderIT >>
+    /\ Clear(SenderIT)
+    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, Buffer, msg, NotifyWrite, ReceiverIT, NotifyRead >>
 
 \* IT & receiver not live: blocked R done
 SenderUnblock2 ==
     /\ SenderLive
     /\ SenderState = Blocked
     /\ ~ReceiverLive
+    /\ SenderIT
     /\ SenderState' = Done
-    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, Buffer, msg, NotifyWrite, ReceiverIT, NotifyRead, SenderIT >>
+    /\ Clear(SenderIT)
+    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, Buffer, msg, NotifyWrite, ReceiverIT, NotifyRead >>
 
 \* End because the receiver has abort
 SenderEnd ==
@@ -220,23 +261,32 @@ ReceiverRead ==
         /\ Got' = Got \o Take(Buffer, n)
         /\ Buffer' = Drop(Buffer, n)
     /\ ReceiverState' = AfterReading
-    /\ UNCHANGED << Sent, SenderLive, ReceiverLive, SenderState, msg, NotifyWrite, ReceiverIT, NotifyRead, SenderIT >>
+    /\ Set(NotifyWrite)
+    /\ UNCHANGED << Sent, SenderLive, ReceiverLive, SenderState, msg, ReceiverIT, NotifyRead, SenderIT >>
 
 
 \* AfterReading R Idle
 ReceiverReadNext ==
     /\ ReceiverLive
     /\ ReceiverState = AfterReading
+    /\ IF NotifyRead
+        THEN
+            /\ Clear(NotifyRead)
+            /\ Set(SenderIT)
+        ELSE
+            UNCHANGED <<NotifyRead, SenderIT>>
     /\ ReceiverState' = Idle
-    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, SenderState, Buffer, msg, NotifyWrite, ReceiverIT, NotifyRead, SenderIT >>
+    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, SenderState, Buffer, msg, NotifyWrite, ReceiverIT >>
 
 
 \* sender it: Blocked R Idle
 ReceiverUnblock ==
     /\ ReceiverLive
     /\ ReceiverState = Blocked
+    /\ ReceiverIT
     /\ ReceiverState' = Idle
-    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, SenderState, Buffer, msg, NotifyWrite, NotifyRead, SenderIT, ReceiverIT >>
+    /\ Clear(ReceiverIT)
+    /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, SenderState, Buffer, msg, NotifyWrite, NotifyRead, SenderIT >>
 
 ReceiverEnd ==
     /\ ReceiverLive
@@ -272,7 +322,7 @@ ReceiverClose ==
 
 Close == SenderClose \/ ReceiverClose
 
-SenderNext == SenderIdle1 \/ SenderIdle2 \/ SenderWrite1 \/ SenderWrite2 \/ SenderWriteNext1 \/ SenderWriteNext2 \/ SenderUnblock1 \/ SenderUnblock2 \/ SenderEnd
+SenderNext == SenderIdle1 \/ SenderIdle2 \/ SenderWrite1 \/ SenderWrite2 \/ SenderWriteNext1 \/ SenderWriteNext2 \/ SenderUnblock1 \/ SenderUnblock2 \/ SenderEnd \/ SenderWrite3
 
 ReceiverNext == ReceiverIdle1 \/ ReceiverIdle2 \/ ReceiverIdle3 \/ ReceiverRead \/ ReceiverReadNext \/ ReceiverUnblock \/ ReceiverEnd
 
@@ -283,11 +333,10 @@ Fairness == WF_vars(Next)
 Spec == Init /\ [][Next]_vars /\ Fairness
 
 ----------------------------------------------------------------
-
 TypeOk ==
-    /\ Sent \in MESSAGE
-    /\ Got \in MESSAGE
-    /\ Buffer \in MSG(BufferSize)
+    /\ Sent \in Seq(Byte)
+    /\ Got \in Seq(Byte)
+    /\ Buffer \in Seq(Byte)
     /\ SenderLive \in BOOLEAN
     /\ ReceiverLive \in BOOLEAN
     /\ NotifyWrite \in BOOLEAN
@@ -296,7 +345,7 @@ TypeOk ==
     /\ ReceiverIT \in BOOLEAN
     /\ SenderState \in {Idle, Writing, AfterWriting, Blocked, Done}
     /\ ReceiverState \in {Idle, Reading, AfterReading, Blocked, Done}
-    /\ msg \in MSG(MaxWriteLen)
+    /\ msg \in Seq(Byte)
 
 (* Whatever we receive is the same as what was sent (i.e. `Got' is a prefix of `Sent') *)
 Integrity == (Take(Sent, Len(Got)) = Got)
