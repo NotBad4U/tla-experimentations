@@ -28,14 +28,13 @@ ReceiverStates == {Idle, Reading, AfterReading, Blocked, Done}
 
 ----------------
 
-Min(x, y) == IF x < y THEN x ELSE y
-
 (* Take(m, i) is the first i elements of message m. *)
 Take(m, i) == SubSeq(m, 1, i)
 
 (* Everything except the first i elements of message m. *)
 Drop(m, i) == SubSeq(m, i + 1, Len(m))
 
+(* Set or Clear flags like NotfiyRead *)
 Clear(f) == f' = FALSE
 Set(f) == f' = TRUE
 
@@ -45,36 +44,23 @@ NotEmpty(b) == Len(b) > 0
 ----------------
 
 VARIABLES
-  (* history variables (for modelling and properties) *)
-  Sent,
-  Got,
-  
-  (* The remaining data that has not yet been added to the buffer: *)
-  msg,
-  
-  (* status of the endpoints. *)
-  SenderLive,   \* init true, cleared by sender
-  ReceiverLive, \* init true, cleared by receiver
+    Sent,
+    Got,
+    msg,
 
-  SenderState,   \* {Idle, Writing, AfterWriting, Blocked, Done}
-  ReceiverState, \* {Idle, Reading, AfterReading, Blocked, Done}
+    SenderLive, \* sender sets to FALSE to close connection
+    ReceiverLive, \* receiver sets to FALSE to close connection
 
-  (* NotifyWrite is a shared flag that is set by the receiver to indicate that it wants to know when data
-     has been written to the buffer. The sender checks it after adding data. If set, the sender
-     clears the flag and notifies the receiver using the event channel. This is represented by
-     ReceiverIT being set to TRUE. It becomes FALSE when the receiver handles the event. *)
-  NotifyWrite,   \* Set by receiver, cleared by sender
-  ReceiverIT,    \* Set by sender, cleared by receiver
+    SenderState,
+    ReceiverState,
 
-  (* Buffer represents the data in transit from the sender to the receiver. *)
-  Buffer,
-  
-  (* NotifyRead is a shared flag that indicates that the sender wants to know when some data
-     has been read and removed from the buffer (and, therefore, that more space is now available).
-     If the receiver sees that this is set after removing data from the buffer,
-     it clears the flag and signals the sender via the event channel, represented by SenderIT. *)
-  NotifyRead,         \* Set by sender, cleared by receiver
-  SenderIT            \* Set by receiver, cleared by sender
+    NotifyWrite, \* receiver wants to be notified of next write - Set by receiver, cleared by sender
+    ReceiverIT,  \* sender has signalled receiver - Set by sender, cleared by receiver
+
+    Buffer,
+
+    NotifyRead, \* sender wants to be notified of next read - Set by sender, cleared by receiver
+    SenderIT    \* receiver has notified sender - Set by receiver, cleared by sender
 
 ----------------------------------------------------------------
 
@@ -148,9 +134,9 @@ SenderWrite2 ==
     /\ UNCHANGED << Sent, Got, SenderLive, ReceiverLive, ReceiverState, NotifyWrite, ReceiverIT, SenderIT >>
 
 (*
-    Fix deadlock when the Sender write everything, msg is empty and so fall into the Blocked state.
+    FIX deadlock: when the Sender write everything, msg is empty and so fall into the Blocked state.
     When the receiver will wake-up and read, it will notify the Sender with SenderIT. But when the
-    sender will execute the action UnblockSender, that will put it in the Writing state. THe problem is
+    sender will execute the action UnblockSender, that will put it in the Writing state. The problem is
     that the msg is empty, so it's impossible to execute SenderWrite1 or SenderWrite2, so it's running into a deadlock.
     To fix this, we add this action to override this problem. It will pass the Sender in Writing State into the AfterWriting state when
     the message is empty.
@@ -256,7 +242,7 @@ ReceiverIdle3 ==
 ReceiverRead ==
     /\ ReceiverLive
     /\ ReceiverState = Reading
-    /\ \E n \in 1..Len(Buffer): \* read arbitrary number of element
+    /\ \E n \in 1..Len(Buffer):
         /\ n < MaxReadLen
         /\ Got' = Got \o Take(Buffer, n)
         /\ Buffer' = Drop(Buffer, n)
@@ -316,17 +302,13 @@ ReceiverClose ==
 
 ----------------
 
-(* Spurious interruption *)
-
-----------------
-
 Close == SenderClose \/ ReceiverClose
 
 SenderNext == SenderIdle1 \/ SenderIdle2 \/ SenderWrite1 \/ SenderWrite2 \/ SenderWriteNext1 \/ SenderWriteNext2 \/ SenderUnblock1 \/ SenderUnblock2 \/ SenderEnd \/ SenderWrite3
 
 ReceiverNext == ReceiverIdle1 \/ ReceiverIdle2 \/ ReceiverIdle3 \/ ReceiverRead \/ ReceiverReadNext \/ ReceiverUnblock \/ ReceiverEnd
 
-Next == SenderNext \/ ReceiverNext
+Next == SenderNext \/ ReceiverNext (* \/ SenderClose \/ ReceiverClose *)
 
 Fairness == WF_vars(Next)
 
@@ -349,13 +331,13 @@ TypeOk ==
 
 (* Whatever we receive is the same as what was sent (i.e. `Got' is a prefix of `Sent') *)
 Integrity == (Take(Sent, Len(Got)) = Got)
-  
+
 (* Any data that the write function reports has been sent successfully (i.e.
    data in Sent when it is back at "ready") will eventually be received (if
    the receiver doesn't close the connection). In particular, this says that
    it's OK for the sender to close its end immediately after sending some data. *)
 Availability ==
-  \A x \in 0..Cardinality(Byte) : x = Len(Sent) /\ SenderState = Idle ~> (Len(Got) >= x)
+    \A x \in 0..Cardinality(Byte) : x = Len(Sent) /\ SenderState = Idle ~> (Len(Got) >= x)
 
 (* If either side closes the connection, both end up in their Done state *)
 ShutdownOK == (~SenderLive \/ ~ReceiverLive) ~> (SenderState = Done /\ ReceiverState = Done)
